@@ -39,19 +39,6 @@ class AbstractTrainer(object):
 
 
 class Trainer(AbstractTrainer):
-    r"""The basic Trainer for basic training and evaluation strategies in recommender systems. This class defines common
-    functions for training and evaluation processes of most recommender system models, including fit(), evaluate(),
-    resume_checkpoint() and some other features helpful for model training and evaluation.
-
-    Generally speaking, this class can serve most recommender system models, If the training process of the model is to
-    simply optimize a single loss without involving any complex training strategies, such as adversarial learning,
-    pre-training and so on.
-
-    Initializing the Trainer needs two parameters: `config` and `model`. `config` records the parameters information
-    for controlling training and evaluation, such as `learning_rate`, `epochs`, `eval_step` and so on.
-    `model` is the instantiated object of a Model Class.
-
-    """
 
     def __init__(self, config, model):
         super(Trainer, self).__init__(config, model)
@@ -91,18 +78,6 @@ class Trainer(AbstractTrainer):
         self.tot_item_num = None
 
     def _build_optimizer(self, **kwargs):
-        r"""Init the Optimizer
-
-        Args:
-            params (torch.nn.Parameter, optional): The parameters to be optimized.
-                Defaults to ``self.model.parameters()``.
-            learner (str, optional): The name of used optimizer. Defaults to ``self.learner``.
-            learning_rate (float, optional): Learning rate. Defaults to ``self.learning_rate``.
-            weight_decay (float, optional): The L2 regularization weight. Defaults to ``self.weight_decay``.
-
-        Returns:
-            torch.optim: the optimizer
-        """
         params = kwargs.pop("params", self.model.parameters())
         learner = kwargs.pop("learner", self.learner)
         learning_rate = kwargs.pop("learning_rate", self.learning_rate)
@@ -146,20 +121,6 @@ class Trainer(AbstractTrainer):
         return optimizer
 
     def _train_epoch(self, train_data, epoch_idx, loss_func=None, show_progress=False):
-        r"""Train the model in an epoch
-
-        Args:
-            train_data (DataLoader): The train data.
-            epoch_idx (int): The current epoch id.
-            loss_func (function): The loss function of :attr:`model`. If it is ``None``, the loss function will be
-                :attr:`self.model.calculate_loss`. Defaults to ``None``.
-            show_progress (bool): Show the progress of training epoch. Defaults to ``False``.
-
-        Returns:
-            float/tuple: The sum of loss returned by all batches in this epoch. If the loss in each batch contains
-            multiple parts and the model return these multiple parts loss instead of the sum of loss, it will return a
-            tuple which includes the sum of loss in each part.
-        """
         self.model.train()
         loss_func = loss_func or self.model.calculate_loss
         total_loss = None
@@ -215,16 +176,6 @@ class Trainer(AbstractTrainer):
         return total_loss
 
     def _valid_epoch(self, valid_data, show_progress=False):
-        r"""Valid the model with valid data
-
-        Args:
-            valid_data (DataLoader): the valid data.
-            show_progress (bool): Show the progress of evaluate epoch. Defaults to ``False``.
-
-        Returns:
-            float: valid score
-            dict: valid result
-        """
         valid_result = self.evaluate(
             valid_data, load_best_model=False, show_progress=show_progress
         )
@@ -232,12 +183,6 @@ class Trainer(AbstractTrainer):
         return valid_score, valid_result
 
     def _save_checkpoint(self, epoch, verbose=True, **kwargs):
-        r"""Store the model parameters information and training information.
-
-        Args:
-            epoch (int): the current epoch id
-
-        """
         if not self.config["single_spec"] and self.config["local_rank"] != 0:
             return
         saved_model_file = kwargs.pop("saved_model_file", self.saved_model_file)
@@ -257,12 +202,6 @@ class Trainer(AbstractTrainer):
             )
 
     def resume_checkpoint(self, resume_file):
-        r"""Load the model parameters information and training information.
-
-        Args:
-            resume_file (file): the checkpoint file
-
-        """
         resume_file = str(resume_file)
         self.saved_model_file = resume_file
         checkpoint = torch.load(resume_file, map_location=self.device)
