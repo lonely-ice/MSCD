@@ -1,3 +1,3 @@
 # MSCD
 
-python run.py
+python run2.py
