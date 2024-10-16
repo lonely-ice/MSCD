@@ -46,8 +46,6 @@ def run(
             nprocs=nproc,
             join=True,
         )
-
-        # Normally, there should be only one item in the queue
         res = None if queue.empty() else queue.get()
     return res
 
@@ -177,13 +175,6 @@ def runs(rank, *args):
 
 
 def objective_function(config_dict=None, config_file_list=None, saved=True):
-    r"""The default objective_function used in HyperTuning
-
-    Args:
-        config_dict (dict, optional): Parameters dictionary used to modify experiment parameters. Defaults to ``None``.
-        config_file_list (list, optional): Config files used to modify experiment parameters. Defaults to ``None``.
-        saved (bool, optional): Whether to save the model. Defaults to ``True``.
-    """
 
     config = Config(config_dict=config_dict, config_file_list=config_file_list)
     init_seed(config["seed"], config["reproducibility"])
@@ -214,20 +205,6 @@ def objective_function(config_dict=None, config_file_list=None, saved=True):
 
 
 def load_data_and_model(model_file):
-    r"""Load filtered dataset, split dataloaders and saved model.
-
-    Args:
-        model_file (str): The path of saved model file.
-
-    Returns:
-        tuple:
-            - config (Config): An instance object of Config, which record parameter information in :attr:`model_file`.
-            - model (AbstractRecommender): The model load from :attr:`model_file`.
-            - dataset (Dataset): The filtered dataset.
-            - train_data (AbstractDataLoader): The dataloader for training.
-            - valid_data (AbstractDataLoader): The dataloader for validation.
-            - test_data (AbstractDataLoader): The dataloader for testing.
-    """
     import torch
 
     checkpoint = torch.load(model_file)
