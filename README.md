@@ -1,1 +1,3 @@
 # MSCD
+
+python run.py
