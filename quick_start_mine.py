@@ -1,41 +1,3 @@
-# @Time   : 2020/10/6, 2022/7/18
-# @Author : Shanlei Mu, Lei Wang
-# @Email  : slmu@ruc.edu.cn, zxcptss@gmail.com
-
-# UPDATE:
-# @Time   : 2022/7/8, 2022/07/10, 2022/07/13, 2023/2/11
-# @Author : Zhen Tian, Junjie Zhang, Gaowei Zhang
-# @Email  : chenyuwuxinn@gmail.com, zjj001128@163.com, zgw15630559577@163.com
-
-"""
-recbole.quick_start
-########################
-"""
-import logging
-import sys
-import torch.distributed as dist
-from collections.abc import MutableMapping
-from logging import getLogger
-
-from ray import tune
-
-from recbole.config import Config
-from recbole.data import (
-    create_dataset,
-    data_preparation,
-)
-from recbole.data.transform import construct_transform
-from recbole.utils import (
-    init_logger,
-    get_model,
-    get_trainer,
-    init_seed,
-    set_color,
-    get_flops,
-    get_environment,
-)
-
-
 def run(
     model,
     dataset,
@@ -49,7 +11,7 @@ def run(
     group_offset=0,
 ):
     if nproc == 1 and world_size <= 0:
-        res = run_recbole(
+        res = run(
             model=model,
             dataset=dataset,
             config_file_list=config_file_list,
@@ -60,9 +22,7 @@ def run(
         if world_size == -1:
             world_size = nproc
         import torch.multiprocessing as mp
-
-        # Refer to https://discuss.pytorch.org/t/problems-with-torch-multiprocess-spawn-and-simplequeue/69674/2
-        # https://discuss.pytorch.org/t/return-from-mp-spawn/94302/2
+        
         queue = mp.get_context("spawn").SimpleQueue()
 
         config_dict = config_dict or {}
@@ -81,7 +41,7 @@ def run(
         }
 
         mp.spawn(
-            run_recboles,
+            runs,
             args=(model, dataset, config_file_list, kwargs),
             nprocs=nproc,
             join=True,
@@ -92,7 +52,7 @@ def run(
     return res
 
 
-def run_recbole(
+def run(
     model=None,
     dataset=None,
     config_file_list=None,
@@ -100,17 +60,7 @@ def run_recbole(
     saved=True,
     queue=None,
 ):
-    r"""A fast running api, which includes the complete process of
-    training and testing a model on a specified dataset
 
-    Args:
-        model (str, optional): Model name. Defaults to ``None``.
-        dataset (str, optional): Dataset name. Defaults to ``None``.
-        config_file_list (list, optional): Config files used to modify experiment parameters. Defaults to ``None``.
-        config_dict (dict, optional): Parameters dictionary used to modify experiment parameters. Defaults to ``None``.
-        saved (bool, optional): Whether to save the model. Defaults to ``True``.
-        queue (torch.multiprocessing.Queue, optional): The queue used to pass the result to the main process. Defaults to ``None``.
-    """
     # configurations initialization
     config = Config(
         model=model,
@@ -212,15 +162,15 @@ def run_recbole(
     return result1, result2  # for the single process
 
 
-def run_recboles(rank, *args):
+def runs(rank, *args):
     kwargs = args[-1]
     if not isinstance(kwargs, MutableMapping):
         raise ValueError(
-            f"The last argument of run_recboles should be a dict, but got {type(kwargs)}"
+            f"The last argument of runs should be a dict, but got {type(kwargs)}"
         )
     kwargs["config_dict"] = kwargs.get("config_dict", {})
     kwargs["config_dict"]["local_rank"] = rank
-    run_recbole(
+    run(
         *args[:3],
         **kwargs,
     )
