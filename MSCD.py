@@ -1,3 +1,31 @@
+# -*- coding: utf-8 -*-
+# @Time   : 2020/9/30 14:07
+# @Author : Yujie Lu
+# @Email  : yujielu1998@gmail.com
+
+r"""
+SRGNN
+################################################
+
+Reference:
+    Shu Wu et al. "Session-based Recommendation with Graph Neural Networks." in AAAI 2019.
+
+Reference code:
+    https://github.com/CRIPAC-DIG/SR-GNN
+
+"""
+import math
+
+import numpy as np
+import torch
+from torch import nn
+from torch.nn import Parameter
+from torch.nn import functional as F
+
+from recbole.model.abstract_recommender import SequentialRecommender
+from recbole.model.loss import BPRLoss
+
+
 class GNN(nn.Module):
     r"""Graph neural networks are well-suited for session-based recommendation,
     because it can automatically extract features of session graphs with considerations of rich node connections.
@@ -24,6 +52,19 @@ class GNN(nn.Module):
         )
 
     def GNNCell(self, A, hidden):
+        r"""Obtain latent vectors of nodes via graph neural networks.
+
+        Args:
+            A(torch.FloatTensor):The connection matrix,shape of [batch_size, max_session_len, 2 * max_session_len]
+
+            hidden(torch.FloatTensor):The item node embedding matrix, shape of
+                [batch_size, max_session_len, embedding_size]
+
+        Returns:
+            torch.FloatTensor: Latent vectors of nodes,shape of [batch_size, max_session_len, embedding_size]
+
+        """
+
         input_in = (
             torch.matmul(A[:, :, : A.size(1)], self.linear_edge_in(hidden)) + self.b_iah
         )
@@ -54,7 +95,34 @@ class GNN(nn.Module):
         return hidden
 
 
-class MSCD(SequentialRecommender):
+class SRGNN(SequentialRecommender):
+    r"""SRGNN regards the conversation history as a directed graph.
+    In addition to considering the connection between the item and the adjacent item,
+    it also considers the connection with other interactive items.
+
+    Such as: A example of a session sequence(eg:item1, item2, item3, item2, item4) and the connection matrix A
+
+    Outgoing edges:
+        === ===== ===== ===== =====
+         \    1     2     3     4
+        === ===== ===== ===== =====
+         1    0     1     0     0
+         2    0     0    1/2   1/2
+         3    0     1     0     0
+         4    0     0     0     0
+        === ===== ===== ===== =====
+
+    Incoming edges:
+        === ===== ===== ===== =====
+         \    1     2     3     4
+        === ===== ===== ===== =====
+         1    0     0     0     0
+         2   1/2    0    1/2    0
+         3    0     1     0     0
+         4    0     1     0     0
+        === ===== ===== ===== =====
+    """
+
     def __init__(self, config, dataset):
         super(SRGNN, self).__init__(config, dataset)
 
@@ -132,6 +200,25 @@ class MSCD(SequentialRecommender):
 
         return alias_inputs, A, items, mask
 
+    def get_sl(self, seq_hidden, item_seq_len):
+        max_indexes = []
+        for i, length in enumerate(item_seq_len):
+            if length == 1:
+                max_indexes.append(0)
+                continue
+            pj = []
+            length = torch.tensor([length]).to('cuda:0')
+            hidden = seq_hidden[i].reshape(1, 50, 64)
+            anchor = self.gather_indexes(hidden, length - 1).squeeze()
+            hidden1 = hidden.squeeze()
+            for output in hidden1:
+                pj.append(torch.dot(output.squeeze(), anchor) /torch.norm(anchor))
+            max_index = pj.index(max(pj))
+            max_indexes.append(max_index)
+        max_indexes = torch.tensor(max_indexes).to('cuda:0')
+        return self.gather_indexes(seq_hidden, max_indexes)
+
+
     def forward(self, item_seq, item_seq_len):
         alias_inputs, A, items, mask = self._get_slice(item_seq)
         hidden = self.item_embedding(items)
@@ -141,7 +228,8 @@ class MSCD(SequentialRecommender):
         )
         seq_hidden = torch.gather(hidden, dim=1, index=alias_inputs)
         # sl
-        ht = self.gather_indexes(seq_hidden, item_seq_len - 1)
+        #ht = self.gather_indexes(seq_hidden, item_seq_len - 1)
+        ht = self.get_sl(seq_hidden, item_seq_len)
         q1 = self.linear_one(ht).view(ht.size(0), 1, ht.size(1))
         q2 = self.linear_two(seq_hidden)
 
@@ -152,7 +240,26 @@ class MSCD(SequentialRecommender):
         seq_output = self.linear_transform(torch.cat([a, ht], dim=1))
         return ht, a, seq_output
 
-    def calculate_loss(self, interaction, seq_output, a, logits):
+    def calculate_loss(self, interaction):
+        item_seq = interaction[self.ITEM_SEQ]
+        item_seq_len = interaction[self.ITEM_SEQ_LEN]
+        ht, a, seq_output = self.forward(item_seq, item_seq_len)
+        pos_items = interaction[self.POS_ITEM_ID]
+        if self.loss_type == "BPR":
+            neg_items = interaction[self.NEG_ITEM_ID]
+            pos_items_emb = self.item_embedding(pos_items)
+            neg_items_emb = self.item_embedding(neg_items)
+            pos_score = torch.sum(seq_output * pos_items_emb, dim=-1)  # [B]
+            neg_score = torch.sum(seq_output * neg_items_emb, dim=-1)  # [B]
+            loss = self.loss_fct(pos_score, neg_score)
+            return loss
+        else:  # self.loss_type = 'CE'
+            test_item_emb = self.item_embedding.weight
+            logits = torch.matmul(seq_output, test_item_emb.transpose(0, 1))
+            loss = self.loss_fct(logits, pos_items)
+            return loss, a, seq_output, logits 
+
+    def calculate_loss2(self, interaction, seq_output, a, logits):
         item_seq = interaction[self.ITEM_SEQ]
         item_seq_len = interaction[self.ITEM_SEQ_LEN]
         ht2, a2, seq_output2 = self.forward(item_seq, item_seq_len)
@@ -168,7 +275,9 @@ class MSCD(SequentialRecommender):
         else:  # self.loss_type = 'CE'
             test_item_emb = self.item_embedding.weight
             logits2 = torch.matmul(seq_output2, test_item_emb.transpose(0, 1))
-            loss = self.loss_fct(logits2, pos_items) + 0.001*self.KLLoss(logits2, logits) + 0.001*self.MSELoss(a2, a) + 0.001*self.MSELoss(seq_output2, seq_output)
+            logits2 = torch.softmax(logits2, dim=-1)
+            logits = torch.softmax(logits, dim=-1)
+            loss = self.loss_fct(logits2, pos_items) + 0.000001*self.KLLoss(logits2, logits) + self.MSELoss(a2, a) + self.MSELoss(seq_output2, seq_output)
 
             return loss
 
