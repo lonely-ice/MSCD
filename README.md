@@ -1,3 +1,5 @@
 # MSCD
 
-We provide some python codes of the algorithm, including the network structure included in MSCD.py, and the distillation process included in quick_start_mine.py and trainer_mine.py.
+The method we proposed is based on the improvement of SRGNN, so some of the model codes are similar to SRGNN and are improved on its basis. 
+We make relevant modifications to the SRGNN code under the Recbole framework, so it is necessary to copy SRGNN.py to the corresponding position under the Recbole framework and overwrite it. 
+trainer.py and quick_start.py also need to be copied to the corresponding positions and overwritten.
