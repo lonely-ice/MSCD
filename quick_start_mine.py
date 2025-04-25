@@ -1,3 +1,41 @@
+# @Time   : 2020/10/6, 2022/7/18
+# @Author : Shanlei Mu, Lei Wang
+# @Email  : slmu@ruc.edu.cn, zxcptss@gmail.com
+
+# UPDATE:
+# @Time   : 2022/7/8, 2022/07/10, 2022/07/13, 2023/2/11
+# @Author : Zhen Tian, Junjie Zhang, Gaowei Zhang
+# @Email  : chenyuwuxinn@gmail.com, zjj001128@163.com, zgw15630559577@163.com
+
+"""
+recbole.quick_start
+########################
+"""
+import logging
+import sys
+import torch.distributed as dist
+from collections.abc import MutableMapping
+from logging import getLogger
+
+from ray import tune
+
+from recbole.config import Config
+from recbole.data import (
+    create_dataset,
+    data_preparation,
+)
+from recbole.data.transform import construct_transform
+from recbole.utils import (
+    init_logger,
+    get_model,
+    get_trainer,
+    init_seed,
+    set_color,
+    get_flops,
+    get_environment,
+)
+
+
 def run(
     model,
     dataset,
@@ -11,7 +49,7 @@ def run(
     group_offset=0,
 ):
     if nproc == 1 and world_size <= 0:
-        res = run(
+        res = run_recbole(
             model=model,
             dataset=dataset,
             config_file_list=config_file_list,
@@ -22,7 +60,9 @@ def run(
         if world_size == -1:
             world_size = nproc
         import torch.multiprocessing as mp
-        
+
+        # Refer to https://discuss.pytorch.org/t/problems-with-torch-multiprocess-spawn-and-simplequeue/69674/2
+        # https://discuss.pytorch.org/t/return-from-mp-spawn/94302/2
         queue = mp.get_context("spawn").SimpleQueue()
 
         config_dict = config_dict or {}
@@ -41,16 +81,18 @@ def run(
         }
 
         mp.spawn(
-            runs,
+            run_recboles,
             args=(model, dataset, config_file_list, kwargs),
             nprocs=nproc,
             join=True,
         )
+
+        # Normally, there should be only one item in the queue
         res = None if queue.empty() else queue.get()
     return res
 
 
-def run(
+def run_recbole(
     model=None,
     dataset=None,
     config_file_list=None,
@@ -58,7 +100,17 @@ def run(
     saved=True,
     queue=None,
 ):
+    r"""A fast running api, which includes the complete process of
+    training and testing a model on a specified dataset
 
+    Args:
+        model (str, optional): Model name. Defaults to ``None``.
+        dataset (str, optional): Dataset name. Defaults to ``None``.
+        config_file_list (list, optional): Config files used to modify experiment parameters. Defaults to ``None``.
+        config_dict (dict, optional): Parameters dictionary used to modify experiment parameters. Defaults to ``None``.
+        saved (bool, optional): Whether to save the model. Defaults to ``True``.
+        queue (torch.multiprocessing.Queue, optional): The queue used to pass the result to the main process. Defaults to ``None``.
+    """
     # configurations initialization
     config = Config(
         model=model,
@@ -160,21 +212,28 @@ def run(
     return result1, result2  # for the single process
 
 
-def runs(rank, *args):
+def run_recboles(rank, *args):
     kwargs = args[-1]
     if not isinstance(kwargs, MutableMapping):
         raise ValueError(
-            f"The last argument of runs should be a dict, but got {type(kwargs)}"
+            f"The last argument of run_recboles should be a dict, but got {type(kwargs)}"
         )
     kwargs["config_dict"] = kwargs.get("config_dict", {})
     kwargs["config_dict"]["local_rank"] = rank
-    run(
+    run_recbole(
         *args[:3],
         **kwargs,
     )
 
 
 def objective_function(config_dict=None, config_file_list=None, saved=True):
+    r"""The default objective_function used in HyperTuning
+
+    Args:
+        config_dict (dict, optional): Parameters dictionary used to modify experiment parameters. Defaults to ``None``.
+        config_file_list (list, optional): Config files used to modify experiment parameters. Defaults to ``None``.
+        saved (bool, optional): Whether to save the model. Defaults to ``True``.
+    """
 
     config = Config(config_dict=config_dict, config_file_list=config_file_list)
     init_seed(config["seed"], config["reproducibility"])
@@ -205,6 +264,20 @@ def objective_function(config_dict=None, config_file_list=None, saved=True):
 
 
 def load_data_and_model(model_file):
+    r"""Load filtered dataset, split dataloaders and saved model.
+
+    Args:
+        model_file (str): The path of saved model file.
+
+    Returns:
+        tuple:
+            - config (Config): An instance object of Config, which record parameter information in :attr:`model_file`.
+            - model (AbstractRecommender): The model load from :attr:`model_file`.
+            - dataset (Dataset): The filtered dataset.
+            - train_data (AbstractDataLoader): The dataloader for training.
+            - valid_data (AbstractDataLoader): The dataloader for validation.
+            - test_data (AbstractDataLoader): The dataloader for testing.
+    """
     import torch
 
     checkpoint = torch.load(model_file)
