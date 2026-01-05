@@ -201,22 +201,31 @@ class SRGNN(SequentialRecommender):
         return alias_inputs, A, items, mask
 
     def get_sl(self, seq_hidden, item_seq_len):
-        max_indexes = []
-        for i, length in enumerate(item_seq_len):
-            if length == 1:
-                max_indexes.append(0)
-                continue
-            pj = []
-            length = torch.tensor([length]).to('cuda:0')
-            hidden = seq_hidden[i].reshape(1, 50, 64)
-            anchor = self.gather_indexes(hidden, length - 1).squeeze()
-            hidden1 = hidden.squeeze()
-            for output in hidden1:
-                pj.append(torch.dot(output.squeeze(), anchor) /torch.norm(anchor))
-            max_index = pj.index(max(pj))
-            max_indexes.append(max_index)
-        max_indexes = torch.tensor(max_indexes).to('cuda:0')
-        return self.gather_indexes(seq_hidden, max_indexes)
+        batch_size, max_len, embed_size = seq_hidden.shape
+        
+        last_indices = item_seq_len - 1
+        anchors = self.gather_indexes(seq_hidden, last_indices)
+        anchor_norms = torch.norm(anchors, dim=1, keepdim=True) + 1e-8
+        
+        seq_hidden_flat = seq_hidden.view(batch_size * max_len, embed_size)
+        anchors_expanded = anchors.unsqueeze(1).expand(batch_size, max_len, embed_size)
+        anchors_expanded = anchors_expanded.reshape(batch_size * max_len, embed_size)
+        
+        dot_products = (seq_hidden_flat * anchors_expanded).sum(dim=1)
+        
+        anchor_norms_expanded = anchor_norms.unsqueeze(1).expand(batch_size, max_len, 1)
+        anchor_norms_expanded = anchor_norms_expanded.reshape(batch_size * max_len, 1)
+        
+        projections = dot_products / anchor_norms_expanded.squeeze(1)
+        projections = projections.view(batch_size, max_len)
+        
+        range_tensor = torch.arange(max_len, device=self.device).unsqueeze(0).expand(batch_size, max_len)
+        mask = range_tensor < item_seq_len.unsqueeze(1)
+        projections_masked = projections.masked_fill(~mask, -float('inf'))
+        
+        max_indices = torch.argmax(projections_masked, dim=1)
+
+        return self.gather_indexes(seq_hidden, max_indices)  
 
 
     def forward(self, item_seq, item_seq_len):
